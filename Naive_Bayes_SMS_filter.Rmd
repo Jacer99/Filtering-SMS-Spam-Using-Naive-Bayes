@@ -1,0 +1,266 @@
+---
+title: "Filtering SMS Spam Using Naive Bayes"
+author: "Jacer Sellami"
+date: "10/01/2020"
+output: 
+  html_document:
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Note: Some part of the materials used in this text are borrowed from the book of Bret Lentz et al, "Machine Learning with R", 2015. And others from R-pubs website.
+
+
+# Libraries
+
+```{r}
+#install.packages("quanteda")# Quantitative Analysis of Textual Data.
+library(quanteda)
+# install.packages("tm")
+library(tm) #text mining package from R community, tm_map(), content_transformer()
+# install.packages("SnowballC")
+library(SnowballC) #used for stemming, wordStem(), stemDocument()
+# install.packages("wordcloud")
+library(wordcloud) #wordcloud generator
+# install.packages("e1071")
+library(e1071) #Naive Bayes
+# install.packages(gmodels)
+library(gmodels) #CrossTable()
+# install.packages("caret")
+library(caret) #ConfusionMatrix()
+```
+
+# Import data 
+
+```{r}
+sms_raw <- read.table("SMSSpamCollection.txt",header=FALSE, sep="\t", quote="", stringsAsFactors=FALSE)
+```
+
+
+
+```{r}
+colnames(sms_raw)=c("type","text")
+sms_raw$type <- factor(sms_raw$type)
+str(sms_raw$type)
+```
+
+```{r}
+table(sms_raw$type)
+```
+
+Now the “type” variable is a factor with 2 levels. Of the 5574 messages, 747 are spam.
+
+# Mining the SMS text with the "tm" package
+
+
+```{r}
+library(tm)
+sms_corpus <- VCorpus(VectorSource(sms_raw$text))
+print(sms_corpus)
+inspect(sms_corpus[1:4])
+as.character(sms_corpus[[3]])
+
+```
+
+
+
+
+```{r}
+sms_corpus_clean <- tm_map(sms_corpus, FUN = content_transformer(tolower))
+```
+
+
+
+```{r}
+as.character(sms_corpus[[3]])
+as.character((sms_corpus_clean[[3]]))
+```
+
+
+
+
+```{r}
+
+sms_corpus_clean <- tm_map(sms_corpus_clean, removeNumbers)
+
+```
+
+
+```{r}
+sms_corpus_clean <- tm_map(sms_corpus_clean, removeWords, stopwords())
+```
+
+
+```{r}
+sms_corpus_clean <- tm_map(sms_corpus_clean, removePunctuation)
+as.character((sms_corpus_clean[[3]]))
+```
+
+
+Perform “stemming” to the text data to strip the suffix from words like “jumping”, so the words “jumping” “jumps” and “jumped” are all transformed into “jump”. Stemming can be perfromed using the “tm” package with help from the “SnowballC” package.
+
+```{r}
+library(SnowballC)
+sms_corpus_clean <- tm_map(sms_corpus_clean, stemDocument)
+```
+
+
+Finally, we remove extra white spaces from the document.
+
+```{r}
+sms_corpus_clean <- tm_map(sms_corpus_clean, stripWhitespace)
+as.character(sms_corpus_clean[[3]])
+```
+
+
+```{r}
+sms_dtm <- DocumentTermMatrix(sms_corpus_clean)
+```
+
+# Data Preparation
+Split our data into training and testing sets, so that after Naive Bayes spam filter algorithm is built it can be applied to unseen data. Divide our data set into 75% training and 25% testing.
+
+```{r}
+.75 * 5574
+.25 * 5574
+```
+
+Because the dataset is random, there’s no need to randomize the objects order in the data. The first 4180 messages can be used for the training set.
+
+```{r}
+sms_dtm_train <- sms_dtm[1:4180, ]
+sms_dtm_test <- sms_dtm[4181:5559, ]
+```
+
+Save vectors labeling rows in the training and testing vectors
+
+```{r}
+sms_train_labels <- sms_raw[1:4180, ]$type
+sms_test_labels <- sms_raw[4181:5559,]$type
+```
+
+
+```{r}
+prop.table(table(sms_train_labels))
+prop.table(table(sms_test_labels))
+```
+
+# Visualization 
+
+Create a wordcloud of the frequency of the words in the dataset using the package “wordcloud”.
+```{r}
+library(wordcloud)
+wordcloud(sms_corpus_clean, max.words = 50, random.order = FALSE)
+```
+Compare wordclouds between spam and ham.
+```{r}
+spam <- subset(sms_raw, type == "spam")
+ham <- subset(sms_raw, type == "ham")
+wordcloud(spam$text, max.words = 30)
+wordcloud(ham$text, max.words = 30)
+
+```
+
+# Preparation for Naive Bayes
+
+Remove words from the matrix that appear less than 5 times.
+
+```{r}
+library(quanteda)
+sms_freq_words <- findFreqTerms(sms_dtm_train, 5)
+str(sms_freq_words)
+
+```
+
+
+```{r}
+sms_dtm_freq_train <- sms_dtm_train[ , sms_freq_words]
+sms_dtm_freq_test <- sms_dtm_test[ , sms_freq_words]
+```
+
+
+
+```{r}
+convert_counts <- function(x) {
+  x <- ifelse(x > 0, "Yes", "No")
+}
+```
+
+This replaces values greater than 0 with yes, and values not greater than 0 with no. Let’s apply it to our data.
+
+```{r}
+sms_train <- apply(sms_dtm_freq_train, MARGIN = 2, convert_counts)
+
+sms_test <- apply(sms_dtm_freq_test, MARGIN = 2, convert_counts)
+```
+
+
+The resulting matrixes will be character type, with cells indicating “yes” or “no” if the word represented by the column appears in the message represented by the row.
+
+# Train Model on the Data.
+
+Use the e1071 package to impliment the Naive Bayes algorithm on the data, and predict whether a message is likely to be spam or ham.
+
+```{r}
+library(e1071)
+```
+
+
+```{r}
+sms_classifier <- naiveBayes(sms_train, sms_train_labels)
+```
+
+
+# Predict and Evaluate the Model.
+
+
+```{r}
+sms_test_pred <- predict(sms_classifier, sms_test, laplace=T)
+```
+
+Evaluate the predition with the actual data using a crosstable from the gmodels package.
+
+```{r}
+library(gmodels)
+CrossTable(sms_test_pred, sms_test_labels, prop.chisq = FALSE, prop.t = FALSE, dnn = c('predicted', 'actual'))
+```
+
+
+
+We can also use the ‘caret’ package to evaluate the the prediction performance on the test set.
+
+```{r}
+library(caret)
+confusionMatrix(sms_test_pred, sms_test_labels)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
